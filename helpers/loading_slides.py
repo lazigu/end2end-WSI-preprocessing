@@ -5,6 +5,8 @@ import logging
 import openslide
 from tqdm import tqdm
 import numpy as np
+import pandas as pd
+import shapely.geometry as sg
 import PIL
 from .exceptions import MPPExtractionError
 
@@ -46,7 +48,24 @@ def load_slide(slide: openslide.OpenSlide, target_mpp: float = 256/224, cores: i
             x, y = tile_target_size * (j, i)
             im[y:y+tile.shape[0], x:x+tile.shape[1], :] = tile
 
-    return im
+    return im, slide_mpp
+
+
+def read_annotations(annon_path):
+    reader = pd.read_csv(annon_path)
+    headers = []
+    for col in reader.columns:
+        headers.append(col.strip())
+    if 'X_base' in headers and 'Y_base' in headers:
+        index_x = headers.index('X_base')
+        index_y = headers.index('Y_base')
+    else:
+        raise IndexError('Unable to find "X_base" and "Y_base" columns in CSV file.')
+    roi_coords=reader.iloc[:,index_x:index_y+1].apply(tuple, axis=1).tolist()
+    rectcoords = [[max(reader.iloc[:,index_x]),min(reader.iloc[:,index_x])],[min(reader.iloc[:,index_y]),max(reader.iloc[:,index_y])]]
+    annPolys = sg.Polygon(roi_coords) # read the Polygon (annotation)
+    return annPolys, np.int32(rectcoords)
+
 
 def get_slide_mpp(slide: openslide.OpenSlide) -> float:
     try:

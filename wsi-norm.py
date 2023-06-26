@@ -13,6 +13,8 @@ import os
 import openslide
 from tqdm import tqdm
 import PIL
+import random
+import csv
 import cv2
 import time
 from datetime import timedelta
@@ -21,9 +23,13 @@ import torch
 from helpers import stainNorm_Macenko
 from helpers.common import supported_extensions
 from helpers.concurrent_canny_rejection import reject_background
-from helpers.loading_slides import process_slide_jpg, load_slide, get_raw_tile_list
+from helpers.loading_slides import process_slide_jpg, load_slide, get_raw_tile_list, read_annotations
 from helpers.feature_extractors import FeatureExtractor
 from marugoto.marugoto.extract.extract import extract_features_
+from shapely.geometry import box
+from shapely.affinity import scale
+PIL.ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -47,6 +53,8 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--del-slide', action='store_true', default=False,
                          help='Removing the original slide after processing.')
     parser.add_argument('--only-fex', action='store_true', default=False)
+    parser.add_argument('--roi-dir', metavar='DIR', type=Path, required=False,
+                        help='Path of where CSV files containing ROI coordinates are.', default=None)
 
     args = parser.parse_args()
 
@@ -66,6 +74,8 @@ if __name__ == "__main__":
     print(f"Number of CPU cores used: {args.cores}")
     has_gpu=torch.cuda.is_available()
     print(f"GPU is available: {has_gpu}")
+    roi_path = args.roi_dir
+    print(f"ROI dir path was given: {roi_path}")
     norm=args.norm
 
     if has_gpu:
@@ -141,7 +151,7 @@ if __name__ == "__main__":
  
                 #measure time performance
                 start_time = time.time()
-                slide_array = load_slide(slide=slide, cores=args.cores)
+                slide_array, slide_mpp = load_slide(slide=slide, cores=args.cores)
                 if slide_array is None:
                     if args.del_slide:
                         print(f"Skipping slide and deleting {slide_url} due to missing MPP...")
@@ -183,13 +193,49 @@ if __name__ == "__main__":
                     print(f"Deleting slide {slide_name} from local folder...")
                     os.remove(str(slide_url))
 
+            if roi_path is not None and os.path.exists(os.path.join(roi_path, str(slide_name) + ".csv")):
+                tiles_within_roi = []
+                coords_of_remaining_tiles = []
+                print("CSV file with coordinates of ROIs is found. Loading annotations...")
+                annPolys, rectcoords = read_annotations(os.path.join(roi_path, str(slide_name) + ".csv"))
+
+                intersection_threshold = 0.6
+
+                target_mpp = 256/224
+                if slide_mpp is None:
+                    print('Slide MPP could not be determined, please run the pipeline from scratch...')
+                    continue
+
+                scale_factor = slide_mpp / target_mp
+                scaled_annPolys = scale(annPolys, xfact=1.0 / scale_factor, yfact=scale_factor, origin=(0, 0))
+
+                for i, tile in enumerate(canny_norm_patch_list):
+
+                    tile_size_x = tile.shape[1]
+                    tile_size_y = tile.shape[0]
+
+                    # create a bounding box for each tile - box(minx, miny, maxx, maxy)
+                    tile_box = box(coords_list[i][0], coords_list[i][1] - tile_size_y,
+                                   coords_list[i][0] + tile_size_x, coords_list[i][1])
+
+                    if scaled_annPolys.intersects(tile_box):
+                        intersection = scaled_annPolys.intersection(tile_box)
+                        if (intersection.area / tile_box.area) >= intersection_threshold:
+                            tiles_within_roi.append(tile)
+                            coords_of_remaining_tiles.append(coords_list[i])
+                print(f"{len(tiles_within_roi)} tiles remain out of {len(canny_norm_patch_list)}")
+
+            else:
+                print("No CSV file with ROIs was found, skipping this slide...")
+                continue
+
             print(f"Extracting {args.extractor} features from {slide_name}")
             #FEATURE EXTRACTION
             #measure time performance
             start_time = time.time()
-            if len(canny_norm_patch_list) > 0:
-                extract_features_(model=model, model_name=model_name, norm_wsi_img=canny_norm_patch_list,
-                                coords=coords_list, wsi_name=slide_name, outdir=feat_out_dir, cores=args.cores, is_norm=args.norm)
+            if len(tiles_within_roi) > 0:
+                extract_features_(model=model, model_name=model_name, norm_wsi_img=tiles_within_roi,
+                                coords=coords_of_remaining_tiles, wsi_name=slide_name, outdir=feat_out_dir, cores=args.cores, is_norm=args.norm)
                 print("\n--- Extracted features from slide: %s seconds ---" % (time.time() - start_time))
             else:
                 print("0 tiles remain to extract features from after pre-processing {slide_name}, skipping...")
