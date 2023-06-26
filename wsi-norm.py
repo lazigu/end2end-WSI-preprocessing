@@ -206,7 +206,7 @@ if __name__ == "__main__":
                     print('Slide MPP could not be determined, please run the pipeline from scratch...')
                     continue
 
-                scale_factor = slide_mpp / target_mp
+                scale_factor = slide_mpp / target_mpp
                 scaled_annPolys = scale(annPolys, xfact=1.0 / scale_factor, yfact=scale_factor, origin=(0, 0))
 
                 for i, tile in enumerate(canny_norm_patch_list):
