@@ -31,8 +31,8 @@ if __name__ == '__main__':
 
     parser.add_argument('-o', '--output-path', type=Path, required=True,
                         help='Path to save features to.')
-    parser.add_argument('--wsi-dir', metavar='DIR', type=Path, required=True,
-                        help='Path of where the whole-slide images are.')
+    parser.add_argument('--tiles-dir', metavar='DIR', type=Path, required=True,
+                        help='Path of where the tiles are.')
     parser.add_argument('-m', '--model', metavar='DIR', type=Path, required=True,
                         help='Path of where model for the feature extractor is.')
     parser.add_argument('--cache-dir', type=Path, default=None,
@@ -71,126 +71,77 @@ if __name__ == "__main__":
     if has_gpu:
         print(f"Number of GPUs in the system: {torch.cuda.device_count()}")
 
-    if norm:
-        print("\nInitialising Macenko normaliser...")
-        target = cv2.imread('normalization_template.jpg') #TODO: make scaleable with path
-        target = cv2.cvtColor(target, cv2.COLOR_BGR2RGB)
-
-        normalizer = stainNorm_Macenko.Normalizer()
-        normalizer.fit(target)
-        logging.info('Running WSI to normalised feature extraction...')
-    else:
-        logging.info('Running WSI to raw feature extraction...')
-
-    #initialize the feature extraction model
+    # initialize the feature extraction model
     print(f"\nInitialising {args.extractor} model...")
     extractor = FeatureExtractor(args.extractor)
     model, model_name = extractor.init_feat_extractor(checkpoint_path=args.model)
 
-    #create output feature folder, f.e.:
-    #~/output_folder/E2E_macenko_xiyuewang-ctranspath/
+    # create output feature folder, f.e.:
+    # ~/output_folder/E2E_macenko_xiyuewang-ctranspath/
     (args.output_path).mkdir(parents=True, exist_ok=True)
-    
+
     norm_method = "E2E_macenko_" if args.norm else "E2E_raw_"
-    model_name_norm = Path(norm_method+model_name)
-    output_file_dir = args.output_path/model_name_norm
+    model_name_norm = Path(norm_method + model_name)
+    output_file_dir = args.output_path / model_name_norm
+    print(output_file_dir)
     output_file_dir.mkdir(parents=True, exist_ok=True)
-    
+
     total_start_time = time.time()
-    
-    img_name = "norm_slide.jpg" if args.norm else "canny_slide.jpg"
-    if not args.only_fex:
-        img_dir = sum((list(args.wsi_dir.glob(f'**/*.{ext}'))
-                    for ext in supported_extensions),
-                    start=[])
-    else:
-        img_dir = list(args.wsi_dir.glob(f'**/*/{img_name}'))
-                       
-    for slide_url in (progress := tqdm(img_dir, leave=False)):
-        
-        if not args.only_fex:
-            slide_name = Path(slide_url).stem
-            slide_cache_dir = args.cache_dir/slide_name
-            slide_cache_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            slide_name = Path(slide_url).parent.name
+
+    slide_dir = os.listdir(args.tiles_dir)
+
+    for slide_url in (progress := tqdm(slide_dir, leave=False)):
+
+        slide_name = os.path.splitext(slide_url)[0]
+        print(f"slide name: {slide_name}")
 
         progress.set_description(slide_name)
         
         feat_out_dir = output_file_dir/slide_name
 
         if not (os.path.exists((f'{feat_out_dir}.h5'))):
-            # Load WSI as one image
-            if (args.only_fex and (slide_jpg := slide_url).exists()) \
-                or (slide_jpg := slide_cache_dir/'norm_slide.jpg').exists():
-                canny_norm_patch_list, coords_list, patch_saved, total = process_slide_jpg(slide_jpg)
-                print(f"Loaded {img_name}, {patch_saved}/{total} tiles remain")
-                if patch_saved == 0:
-                    print("No tiles remain for {slide_name}, skipping...")
-                    continue
-            else:
-                logging.info(f"\nLoading {slide_name}")
-                try:
-                    slide = openslide.OpenSlide(str(slide_url))
-                except openslide.lowlevel.OpenSlideUnsupportedFormatError:
-                    logging.error(f"Unsupported format for {slide_name}")
-                    continue
-                except Exception as e:
-                    logging.error(f"Failed loading {slide_name}, error: {e}")
-                    continue
+
+            logging.info(f"\nLoading tiles of {slide_name}")
  
-                #measure time performance
-                start_time = time.time()
-                slide_array = load_slide(slide=slide, cores=args.cores)
-                if slide_array is None:
-                    if args.del_slide:
-                        print(f"Skipping slide and deleting {slide_url} due to missing MPP...")
-                        os.remove(str(slide_url))
-                    continue
-                #save raw .svs jpg
-                (PIL.Image.fromarray(slide_array)).save(f'{slide_cache_dir}/slide.jpg')
+            # measure time performance
+            start_time = time.time()
 
-                #remove .SVS from memory
-                del slide
-                
-                print("\n--- Loaded slide: %s seconds ---" % (time.time() - start_time))
-                #########################
+            tiles_list = []
+            coords_list = []
 
-                #########################
-                #Do edge detection here and reject unnecessary tiles BEFORE normalisation
-                bg_reject_array, rejected_tile_array, patch_shapes = reject_background(img = slide_array, patch_size=(224,224), step=224, outdir=args.cache_dir, save_tiles=False, cores=args.cores)
+            for slide_fname in slide_dir:
+                tiles_fnames = os.listdir(os.path.join(args.tiles_dir, slide_fname))
+                for fname in tiles_fnames:
+                    if fname.endswith('.jpg'):
+                        # Load the tile and append it to the tiles list
+                        tile_path = os.path.join(os.path.join(args.tiles_dir, slide_fname, fname))
+                        # print(tile_path)
+                        tile = cv2.imread(tile_path)
+                        tiles_list.append(tile)
 
-                #measure time performance
-                start_time = time.time()
-                #pass raw slide_array for getting the initial concentrations, bg_reject_array for actual normalisation
-                if norm:
-                    logging.info(f"Normalising {slide_name}...")
-                    canny_img, img_norm_wsi_jpg, canny_norm_patch_list, coords_list = normalizer.transform(slide_array, bg_reject_array, rejected_tile_array, patch_shapes, cores=args.cores)
-                    print(f"\n--- Normalised slide {slide_name}: {(time.time() - start_time)} seconds ---")
-                    img_norm_wsi_jpg.save(slide_jpg) #save WSI.svs -> WSI.jpg
+                        # Extract the coordinates from the filename
+                        coords_str = fname.split('_')[-1].split('.jpg')[0]
+                        coords_str = coords_str.replace('(', '').replace(')', '')
+                        x, y = map(int, coords_str.split(','))
+                        coordinate_tuple = (x, y)
+                        coords_list.append(coordinate_tuple)
 
-                else:
-                    canny_img, canny_norm_patch_list, coords_list = get_raw_tile_list(slide_array.shape, bg_reject_array, rejected_tile_array, patch_shapes)
 
-                print("Saving Canny background rejected image...")
-                canny_img.save(f'{slide_cache_dir}/canny_slide.jpg')
-                
-                #remove original slide jpg from memory
-                del slide_array
-                
-                #optionally removing the original slide from harddrive
-                if args.del_slide:
-                    print(f"Deleting slide {slide_name} from local folder...")
-                    os.remove(str(slide_url))
+            if len(tiles_list) == 0:
+                print(f"Skipping slide {slide_url} because no tiles could be found/loaded correctly...")
+                continue
+
+            print("\n--- Loaded tiles of the slide: %s seconds ---" % (time.time() - start_time))
+            #########################
 
             print(f"Extracting {args.extractor} features from {slide_name}")
             #FEATURE EXTRACTION
             #measure time performance
             start_time = time.time()
-            if len(canny_norm_patch_list) > 0:
-                extract_features_(model=model, model_name=model_name, norm_wsi_img=canny_norm_patch_list,
+            if len(tiles_list) > 0:
+                extract_features_(model=model, model_name=model_name, norm_wsi_img=tiles_list,
                                 coords=coords_list, wsi_name=slide_name, outdir=feat_out_dir, cores=args.cores, is_norm=args.norm)
-                print("\n--- Extracted features from slide: %s seconds ---" % (time.time() - start_time))
+                print(f"\n--- Extracted features from slide {slide_name}: %s seconds ---" % (time.time() - start_time))
             else:
                 print("0 tiles remain to extract features from after pre-processing {slide_name}, skipping...")
                 continue
@@ -202,4 +153,4 @@ if __name__ == "__main__":
                 print(f"Deleting slide {slide_name} from local folder...")
                 os.remove(str(slide_url))
 
-    print(f"--- End-to-end processing time of {len(img_dir)} slides: {str(timedelta(seconds=(time.time() - total_start_time)))} ---")
+    print(f"--- End-to-end processing time of {len(slide_dir)} slides: {str(timedelta(seconds=(time.time() - total_start_time)))} ---")
