@@ -109,22 +109,21 @@ if __name__ == "__main__":
             tiles_list = []
             coords_list = []
 
-            for slide_fname in slide_dir:
-                tiles_fnames = os.listdir(os.path.join(args.tiles_dir, slide_fname))
-                for fname in tiles_fnames:
-                    if fname.endswith('.jpg'):
-                        # Load the tile and append it to the tiles list
-                        tile_path = os.path.join(os.path.join(args.tiles_dir, slide_fname, fname))
-                        # print(tile_path)
-                        tile = cv2.imread(tile_path)
-                        tiles_list.append(tile)
+            tiles_fnames = os.listdir(os.path.join(args.tiles_dir, slide_url))
+            for fname in tqdm(tiles_fnames, desc="Loading tiles"):
+                if fname.endswith('.jpg'):
+                    # Load the tile and append it to the tiles list
+                    tile_path = os.path.join(os.path.join(args.tiles_dir, slide_url, fname))
+                    # print(tile_path)
+                    tile = cv2.imread(tile_path)
+                    tiles_list.append(tile)
 
-                        # Extract the coordinates from the filename
-                        coords_str = fname.split('_')[-1].split('.jpg')[0]
-                        coords_str = coords_str.replace('(', '').replace(')', '')
-                        x, y = map(int, coords_str.split(','))
-                        coordinate_tuple = (x, y)
-                        coords_list.append(coordinate_tuple)
+                    # Extract the coordinates from the filename
+                    coords_str = fname.split('_')[-1].split('.jpg')[0]
+                    coords_str = coords_str.replace('(', '').replace(')', '')
+                    x, y = map(int, coords_str.split(','))
+                    coordinate_tuple = (x, y)
+                    coords_list.append(coordinate_tuple)
 
 
             if len(tiles_list) == 0:
