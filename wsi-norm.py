@@ -130,7 +130,7 @@ if __name__ == "__main__":
                 print(f"Skipping slide {slide_url} because no tiles could be found/loaded correctly...")
                 continue
 
-            print("\n--- Loaded tiles of the slide: %s seconds ---" % (time.time() - start_time))
+            print(f"\n--- Loaded {len(tiles_list)} tiles of the slide: %s seconds ---" % (time.time() - start_time))
             #########################
 
             print(f"Extracting {args.extractor} features from {slide_name}")
