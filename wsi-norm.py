@@ -47,7 +47,7 @@ if __name__ == '__main__':
         help='Directory to store resulting slide JPGs.')
     parser.add_argument('-e', '--extractor', type=str, 
                         help='Feature extractor to use.')
-    parser.add_argument('-c', '--cores', type=int, default=64,
+    parser.add_argument('-c', '--cores', type=int, default=8,
                     help='CPU cores to use, 8 default.')
     parser.add_argument('-n','--norm', action='store_true')
     parser.add_argument('--no-norm', dest='norm', action='store_false')
