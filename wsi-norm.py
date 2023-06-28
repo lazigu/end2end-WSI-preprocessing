@@ -28,6 +28,8 @@ from helpers.feature_extractors import FeatureExtractor
 from marugoto.marugoto.extract.extract import extract_features_
 from shapely.geometry import box
 from shapely.affinity import scale
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 PIL.ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
@@ -45,7 +47,7 @@ if __name__ == '__main__':
         help='Directory to store resulting slide JPGs.')
     parser.add_argument('-e', '--extractor', type=str, 
                         help='Feature extractor to use.')
-    parser.add_argument('-c', '--cores', type=int, default=8,
+    parser.add_argument('-c', '--cores', type=int, default=64,
                     help='CPU cores to use, 8 default.')
     parser.add_argument('-n','--norm', action='store_true')
     parser.add_argument('--no-norm', dest='norm', action='store_false')
@@ -109,12 +111,10 @@ if __name__ == "__main__":
     total_start_time = time.time()
     
     img_name = "norm_slide.jpg" if args.norm else "canny_slide.jpg"
-    if not args.only_fex:
-        img_dir = sum((list(args.wsi_dir.glob(f'**/*.{ext}'))
-                    for ext in supported_extensions),
-                    start=[])
-    else:
-        img_dir = list(args.wsi_dir.glob(f'**/*/{img_name}'))
+
+    img_dir = sum((list(args.wsi_dir.glob(f'**/*.{ext}'))
+                for ext in supported_extensions),
+                start=[])
                        
     for slide_url in (progress := tqdm(img_dir, leave=False)):
         
@@ -131,73 +131,75 @@ if __name__ == "__main__":
 
         if not (os.path.exists((f'{feat_out_dir}.h5'))):
             # Load WSI as one image
-            if (args.only_fex and (slide_jpg := slide_url).exists()) \
-                or (slide_jpg := slide_cache_dir/'norm_slide.jpg').exists():
-                canny_norm_patch_list, coords_list, patch_saved, total = process_slide_jpg(slide_jpg)
-                print(f"Loaded {img_name}, {patch_saved}/{total} tiles remain")
-                if patch_saved == 0:
-                    print("No tiles remain for {slide_name}, skipping...")
-                    continue
-            else:
-                logging.info(f"\nLoading {slide_name}")
-                try:
-                    slide = openslide.OpenSlide(str(slide_url))
-                except openslide.lowlevel.OpenSlideUnsupportedFormatError:
-                    logging.error(f"Unsupported format for {slide_name}")
-                    continue
-                except Exception as e:
-                    logging.error(f"Failed loading {slide_name}, error: {e}")
-                    continue
- 
-                #measure time performance
-                start_time = time.time()
-                slide_array, slide_mpp = load_slide(slide=slide, cores=args.cores)
-                if slide_array is None:
-                    if args.del_slide:
-                        print(f"Skipping slide and deleting {slide_url} due to missing MPP...")
-                        os.remove(str(slide_url))
-                    continue
-                #save raw .svs jpg
-                (PIL.Image.fromarray(slide_array)).save(f'{slide_cache_dir}/slide.jpg')
+            logging.info(f"\nLoading {slide_name}")
+            try:
+                slide = openslide.OpenSlide(str(slide_url))
+            except openslide.lowlevel.OpenSlideUnsupportedFormatError:
+                logging.error(f"Unsupported format for {slide_name}")
+                continue
+            except Exception as e:
+                logging.error(f"Failed loading {slide_name}, error: {e}")
+                continue
 
-                #remove .SVS from memory
-                del slide
-                
-                print("\n--- Loaded slide: %s seconds ---" % (time.time() - start_time))
-                #########################
-
-                #########################
-                #Do edge detection here and reject unnecessary tiles BEFORE normalisation
-                bg_reject_array, rejected_tile_array, patch_shapes = reject_background(img = slide_array, patch_size=(224,224), step=224, outdir=args.cache_dir, save_tiles=False, cores=args.cores)
-
-                #measure time performance
-                start_time = time.time()
-                #pass raw slide_array for getting the initial concentrations, bg_reject_array for actual normalisation
-                if norm:
-                    logging.info(f"Normalising {slide_name}...")
-                    canny_img, img_norm_wsi_jpg, canny_norm_patch_list, coords_list = normalizer.transform(slide_array, bg_reject_array, rejected_tile_array, patch_shapes, cores=args.cores)
-                    print(f"\n--- Normalised slide {slide_name}: {(time.time() - start_time)} seconds ---")
-                    img_norm_wsi_jpg.save(slide_jpg) #save WSI.svs -> WSI.jpg
-
-                else:
-                    canny_img, canny_norm_patch_list, coords_list = get_raw_tile_list(slide_array.shape, bg_reject_array, rejected_tile_array, patch_shapes)
-
-                print("Saving Canny background rejected image...")
-                canny_img.save(f'{slide_cache_dir}/canny_slide.jpg')
-                
-                #remove original slide jpg from memory
-                del slide_array
-                
-                #optionally removing the original slide from harddrive
+            #measure time performance
+            start_time = time.time()
+            slide_array, slide_mpp = load_slide(slide=slide, cores=args.cores)
+            if slide_array is None:
                 if args.del_slide:
-                    print(f"Deleting slide {slide_name} from local folder...")
+                    print(f"Skipping slide and deleting {slide_url} due to missing MPP...")
                     os.remove(str(slide_url))
+                continue
+            #save raw .svs jpg
+            (PIL.Image.fromarray(slide_array)).save(f'{slide_cache_dir}/slide.jpg')
+
+            #remove .SVS from memory
+            del slide
+
+            print("\n--- Loaded slide: %s seconds ---" % (time.time() - start_time))
+            #########################
+
+            #########################
+            #Do edge detection here and reject unnecessary tiles BEFORE normalisation
+            bg_reject_array, rejected_tile_array, patch_shapes = reject_background(img = slide_array, patch_size=(224,224), step=224, outdir=args.cache_dir, save_tiles=False, cores=args.cores)
+
+            #measure time performance
+            start_time = time.time()
+            #pass raw slide_array for getting the initial concentrations, bg_reject_array for actual normalisation
+            if norm:
+                slide_jpg = slide_cache_dir/"norm_slide.jpg"
+                logging.info(f"Normalising {slide_name}...")
+                canny_img, img_norm_wsi_jpg, canny_norm_patch_list, coords_list = normalizer.transform(slide_array, bg_reject_array, rejected_tile_array, patch_shapes, cores=args.cores)
+                print(f"\n--- Normalised slide {slide_name}: {(time.time() - start_time)} seconds ---")
+                img_norm_wsi_jpg.save(slide_jpg) #save WSI.svs -> WSI.jpg
+
+            else:
+                canny_img, canny_norm_patch_list, coords_list = get_raw_tile_list(slide_array.shape, bg_reject_array, rejected_tile_array, patch_shapes)
+
+            print("Saving Canny background rejected image...")
+            canny_img.save(f'{slide_cache_dir}/canny_slide.jpg')
+
+            #remove original slide jpg from memory
+            del slide_array
+
+            #optionally removing the original slide from harddrive
+            if args.del_slide:
+                print(f"Deleting slide {slide_name} from local folder...")
+                os.remove(str(slide_url))
 
             if roi_path is not None and os.path.exists(os.path.join(roi_path, str(slide_name) + ".csv")):
+
+                if not os.path.exists(os.path.join(args.cache_dir, "plots")):
+                    os.makedirs(os.path.join(args.cache_dir, "plots"))
+
                 tiles_within_roi = []
                 coords_of_remaining_tiles = []
+                tile_boxes = []
                 print("CSV file with coordinates of ROIs is found. Loading annotations...")
-                annPolys, rectcoords = read_annotations(os.path.join(roi_path, str(slide_name) + ".csv"))
+                try:
+                    annPolys, rectcoords = read_annotations(os.path.join(roi_path, str(slide_name) + ".csv"))
+                except Exception as err:
+                    print(f"CSV file could not be successfully read (error: {err}), slide {slide_name} will be skipped...")
+                    continue
 
                 intersection_threshold = 0.6
 
@@ -207,9 +209,9 @@ if __name__ == "__main__":
                     continue
 
                 scale_factor = slide_mpp / target_mpp
-                scaled_annPolys = scale(annPolys, xfact=1.0 / scale_factor, yfact=scale_factor, origin=(0, 0))
+                scaled_annPolys = scale(annPolys, xfact=scale_factor, yfact=scale_factor, origin=(0, 0))
 
-                for i, tile in enumerate(canny_norm_patch_list):
+                for i, tile in tqdm(enumerate(canny_norm_patch_list), desc="Checking whether tiles are within ROIs", total=len(canny_norm_patch_list)):
 
                     tile_size_x = tile.shape[1]
                     tile_size_y = tile.shape[0]
@@ -217,16 +219,35 @@ if __name__ == "__main__":
                     # create a bounding box for each tile - box(minx, miny, maxx, maxy)
                     tile_box = box(coords_list[i][0], coords_list[i][1] - tile_size_y,
                                    coords_list[i][0] + tile_size_x, coords_list[i][1])
+                    tile_boxes.append(tile_box)
 
-                    if scaled_annPolys.intersects(tile_box):
-                        intersection = scaled_annPolys.intersection(tile_box)
-                        if (intersection.area / tile_box.area) >= intersection_threshold:
-                            tiles_within_roi.append(tile)
-                            coords_of_remaining_tiles.append(coords_list[i])
+                    try:
+                        if scaled_annPolys.intersects(tile_box):
+                            intersection = scaled_annPolys.intersection(tile_box)
+                            if (intersection.area / tile_box.area) >= intersection_threshold:
+                                tiles_within_roi.append(tile)
+                                coords_of_remaining_tiles.append(coords_list[i])
+                    except Exception as err:
+                        print("Tile contains NaN/Inf values, it will be skipped")
+                        continue
+
+
                 print(f"{len(tiles_within_roi)} tiles remain out of {len(canny_norm_patch_list)}")
 
+                fig, ax = plt.subplots()
+                x, y = scaled_annPolys.exterior.xy
+                ax.fill(x, y, alpha=0.5, fc='r', ec='none', label='Annotated Tissue')
+                for tile in tile_boxes:
+                    x, y = tile.exterior.xy
+                    ax.fill(x, y, alpha=0.5, fc='b', ec='none', label='Extracted Tiles')
+
+                legend_elements = [Patch(facecolor='red', edgecolor='r', alpha=0.5, label='Annotated Tissue'),
+                                   Patch(facecolor='blue', edgecolor='b', alpha=0.5, label='Extracted Tiles')]
+                ax.legend(handles=legend_elements, loc='upper right')
+                plt.save(os.path.join(args.cache_dir, "plots", slide_name + ".png"))
+
             else:
-                print("No CSV file with ROIs was found, skipping this slide...")
+                print(f"No CSV file with ROIs was found, skipping this slide {slide_name}...")
                 continue
 
             print(f"Extracting {args.extractor} features from {slide_name}")
@@ -238,7 +259,7 @@ if __name__ == "__main__":
                                 coords=coords_of_remaining_tiles, wsi_name=slide_name, outdir=feat_out_dir, cores=args.cores, is_norm=args.norm)
                 print("\n--- Extracted features from slide: %s seconds ---" % (time.time() - start_time))
             else:
-                print("0 tiles remain to extract features from after pre-processing {slide_name}, skipping...")
+                print(f"0 tiles remain to extract features from after pre-processing {slide_name}, skipping...")
                 continue
             #########################
 

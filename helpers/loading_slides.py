@@ -53,6 +53,7 @@ def load_slide(slide: openslide.OpenSlide, target_mpp: float = 256/224, cores: i
 
 def read_annotations(annon_path):
     reader = pd.read_csv(annon_path)
+    reader = reader.apply(pd.to_numeric, errors='coerce')
     headers = []
     for col in reader.columns:
         headers.append(col.strip())
