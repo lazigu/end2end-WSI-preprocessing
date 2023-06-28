@@ -227,8 +227,7 @@ if __name__ == "__main__":
                             if (intersection.area / tile_box.area) >= intersection_threshold:
                                 tiles_within_roi.append(tile)
                                 coords_of_remaining_tiles.append(coords_list[i])
-                    except Exception as err:
-                        print("Tile contains NaN/Inf values, it will be skipped")
+                    except Exception as err: # to catch an exception if polygon contains
                         continue
 
 
@@ -244,7 +243,7 @@ if __name__ == "__main__":
                 legend_elements = [Patch(facecolor='red', edgecolor='r', alpha=0.5, label='Annotated Tissue'),
                                    Patch(facecolor='blue', edgecolor='b', alpha=0.5, label='Extracted Tiles')]
                 ax.legend(handles=legend_elements, loc='upper right')
-                plt.save(os.path.join(args.cache_dir, "plots", slide_name + ".png"))
+                plt.savefig(os.path.join(args.cache_dir, "plots", slide_name + ".png"))
 
             else:
                 print(f"No CSV file with ROIs was found, skipping this slide {slide_name}...")
