@@ -51,21 +51,74 @@ def load_slide(slide: openslide.OpenSlide, target_mpp: float = 256/224, cores: i
     return im, slide_mpp
 
 
+def contains_nan_or_inf(polygon):
+    """Add checks for NaN/Inf values in polygon"""
+    for x, y in polygon.exterior.coords:
+        if np.isnan(x) or np.isnan(y) or np.isinf(x) or np.isinf(y):
+            return True
+    return False
+
+
+def fix_invalid_polygon(polygon):
+    new_coords = [(x, y) for x, y in polygon.exterior.coords if
+                  not (np.isnan(x) or np.isnan(y) or np.isinf(x) or np.isinf(y))]
+    return sg.Polygon(new_coords)
+
+
 def read_annotations(annon_path):
-    reader = pd.read_csv(annon_path)
-    reader = reader.apply(pd.to_numeric, errors='coerce')
-    headers = []
-    for col in reader.columns:
-        headers.append(col.strip())
-    if 'X_base' in headers and 'Y_base' in headers:
-        index_x = headers.index('X_base')
-        index_y = headers.index('Y_base')
-    else:
+    polygons = []
+    rectcoords_list = []
+
+    with open(annon_path, 'r') as f:
+        lines = f.readlines()
+
+    headers = [h.strip() for h in lines[0].split(',')]  # Assuming CSV is comma separated
+    if 'X_base' not in headers or 'Y_base' not in headers:
         raise IndexError('Unable to find "X_base" and "Y_base" columns in CSV file.')
-    roi_coords=reader.iloc[:,index_x:index_y+1].apply(tuple, axis=1).tolist()
-    rectcoords = [[max(reader.iloc[:,index_x]),min(reader.iloc[:,index_x])],[min(reader.iloc[:,index_y]),max(reader.iloc[:,index_y])]]
-    annPolys = sg.Polygon(roi_coords) # read the Polygon (annotation)
-    return annPolys, np.int32(rectcoords)
+
+    index_x = headers.index('X_base')
+    index_y = headers.index('Y_base')
+
+    roi_coords = []
+    for line in lines[1:]:  # Skip the header
+        elements = line.split(',')
+        if elements[index_x] == 'X_base' or elements[index_y] == 'Y_base':
+            # If we encounter a new 'X_base' or 'Y_base', save the previous polygon (if exists)
+            if roi_coords and len(set(roi_coords)) >= 3:  # Ensure we have at least 3 unique points
+                polygons.append(sg.Polygon(roi_coords))
+                rectcoords_list.append([
+                    [max(coord[0] for coord in roi_coords), min(coord[0] for coord in roi_coords)],
+                    [min(coord[1] for coord in roi_coords), max(coord[1] for coord in roi_coords)]
+                ])
+            # Start a new polygon
+            roi_coords = []
+            continue
+        else:
+            roi_coords.append((float(elements[index_x]), float(elements[index_y])))  # Convert coordinates to numeric
+
+    # Save the last polygon
+    if roi_coords and len(set(roi_coords)) >= 3:
+        polygons.append(sg.Polygon(roi_coords))
+        rectcoords_list.append([
+            [max(coord[0] for coord in roi_coords), min(coord[0] for coord in roi_coords)],
+            [min(coord[1] for coord in roi_coords), max(coord[1] for coord in roi_coords)]
+        ])
+
+    for polygon in polygons:
+        # remove invalid polygons and apply buffer
+        if isinstance(polygon, sg.Polygon):
+            if contains_nan_or_inf(polygon):
+                polygon = fix_invalid_polygon(polygon)
+                print("Invalid polygon was fixed. It might have introduced some errors in the actual geometry")
+            # try to catch possible topology exceptions, e.g. due to polygon intersecting with itself
+            if not polygon.is_valid:
+                polygon = polygon.buffer(0)
+                print("Invalid polygon was fixed. It might have introduced some errors in the actual geometry")
+
+    # Combine the individual polygons into a single MultiPolygon object
+    annPolys = sg.MultiPolygon(polygons)
+
+    return annPolys, np.int32(rectcoords_list)
 
 
 def get_slide_mpp(slide: openslide.OpenSlide) -> float:

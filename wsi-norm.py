@@ -29,6 +29,8 @@ from marugoto.marugoto.extract.extract import extract_features_
 from shapely.geometry import box
 from shapely.affinity import scale
 import matplotlib.pyplot as plt
+import shapely.geometry as sg
+import numpy as np
 from matplotlib.patches import Patch
 PIL.ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -190,6 +192,8 @@ if __name__ == "__main__":
 
                 if not os.path.exists(os.path.join(args.cache_dir, "plots")):
                     os.makedirs(os.path.join(args.cache_dir, "plots"))
+                if not os.path.exists(os.path.join(args.cache_dir, "tiles_coords")):
+                    os.makedirs(os.path.join(args.cache_dir, "tiles_coords"))
 
                 tiles_within_roi = []
                 coords_of_remaining_tiles = []
@@ -211,31 +215,52 @@ if __name__ == "__main__":
                 scale_factor = slide_mpp / target_mpp
                 scaled_annPolys = scale(annPolys, xfact=scale_factor, yfact=scale_factor, origin=(0, 0))
 
-                for i, tile in tqdm(enumerate(canny_norm_patch_list), desc="Checking whether tiles are within ROIs", total=len(canny_norm_patch_list)):
+                with open(os.path.join(args.cache_dir, "tiles_coords", slide_name + '.csv'), 'w', newline='') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(["Coords"])
 
-                    tile_size_x = tile.shape[1]
-                    tile_size_y = tile.shape[0]
+                    for i, tile in tqdm(enumerate(canny_norm_patch_list), desc="Checking whether tiles are within ROIs", total=len(canny_norm_patch_list)):
 
-                    # create a bounding box for each tile - box(minx, miny, maxx, maxy)
-                    tile_box = box(coords_list[i][0], coords_list[i][1] - tile_size_y,
-                                   coords_list[i][0] + tile_size_x, coords_list[i][1])
-                    tile_boxes.append(tile_box)
+                        tile_size_x = tile.shape[1]
+                        tile_size_y = tile.shape[0]
 
-                    try:
-                        if scaled_annPolys.intersects(tile_box):
-                            intersection = scaled_annPolys.intersection(tile_box)
-                            if (intersection.area / tile_box.area) >= intersection_threshold:
-                                tiles_within_roi.append(tile)
-                                coords_of_remaining_tiles.append(coords_list[i])
-                    except Exception as err: # to catch an exception if polygon contains
-                        continue
+                        # create a bounding box for each tile - box(minx, miny, maxx, maxy)
+                        tile_box = box(coords_list[i][0], coords_list[i][1],
+                                       coords_list[i][0] + tile_size_x, coords_list[i][1] + tile_size_y)
+                        tile_boxes.append(tile_box)
+                        writer.writerow([tile_box])
+
+                        try:
+                            if isinstance(scaled_annPolys, sg.MultiPolygon):
+                                for single_polygon in scaled_annPolys.geoms:
+                                    if single_polygon.intersects(tile_box):
+                                        intersection = single_polygon.intersection(tile_box)
+                                        if (intersection.area / tile_box.area) >= 0.6:
+                                            tiles_within_roi.append(tile)
+                                            writer.writerow([tile_box])
+                                            coords_of_remaining_tiles.append(coords_list[i])
+                            else:
+                                if scaled_annPolys.intersects(tile_box):
+                                    intersection = scaled_annPolys.intersection(tile_box)
+                                    if (intersection.area / tile_box.area) >= 0.6:
+                                        tiles_within_roi.append(tile)
+                                        writer.writerow([tile_box])
+                                        coords_of_remaining_tiles.append(coords_list[i])
+                        except Exception as err:
+                            print(f"There was an error with a polygon, which was not caught by existing checks, skipping this tile. Error: {err}")
+                            continue
 
 
                 print(f"{len(tiles_within_roi)} tiles remain out of {len(canny_norm_patch_list)}")
 
                 fig, ax = plt.subplots()
-                x, y = scaled_annPolys.exterior.xy
-                ax.fill(x, y, alpha=0.5, fc='r', ec='none', label='Annotated Tissue')
+                if isinstance(scaled_annPolys, sg.MultiPolygon):
+                    for i, polygon in enumerate(scaled_annPolys.geoms):
+                        x, y = polygon.exterior.xy
+                        ax.fill(x, y, alpha=0.5, fc='r', label=f'Annotated Tissue')
+                else:
+                    x, y = scaled_annPolys.exterior.xy
+                    ax.fill(x, y, alpha=0.5, fc='r', ec='none')
                 for tile in tile_boxes:
                     x, y = tile.exterior.xy
                     ax.fill(x, y, alpha=0.5, fc='b', ec='none', label='Extracted Tiles')
@@ -243,6 +268,7 @@ if __name__ == "__main__":
                 legend_elements = [Patch(facecolor='red', edgecolor='r', alpha=0.5, label='Annotated Tissue'),
                                    Patch(facecolor='blue', edgecolor='b', alpha=0.5, label='Extracted Tiles')]
                 ax.legend(handles=legend_elements, loc='upper right')
+                ax.invert_yaxis()
                 plt.savefig(os.path.join(args.cache_dir, "plots", slide_name + ".png"))
 
             else:
