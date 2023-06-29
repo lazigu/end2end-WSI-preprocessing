@@ -237,14 +237,12 @@ if __name__ == "__main__":
                                         intersection = single_polygon.intersection(tile_box)
                                         if (intersection.area / tile_box.area) >= 0.6:
                                             tiles_within_roi.append(tile)
-                                            writer.writerow([tile_box])
                                             coords_of_remaining_tiles.append(coords_list[i])
                             else:
                                 if scaled_annPolys.intersects(tile_box):
                                     intersection = scaled_annPolys.intersection(tile_box)
                                     if (intersection.area / tile_box.area) >= 0.6:
                                         tiles_within_roi.append(tile)
-                                        writer.writerow([tile_box])
                                         coords_of_remaining_tiles.append(coords_list[i])
                         except Exception as err:
                             print(f"There was an error with a polygon, which was not caught by existing checks, skipping this tile. Error: {err}")
